@@ -4,24 +4,136 @@
 	import KineticHeading from '$lib/components/KineticHeading.svelte';
 	import AmbientParticles from '$lib/components/AmbientParticles.svelte';
 	import { audience } from '$lib/stores/audience.svelte';
-	import { hero, heroBadge, heroPerks } from '$lib/content';
+	import { hero, audienceSwitch } from '$lib/content';
 	import { prefersReducedMotion } from '$lib/motion/prefersReducedMotion';
 	import { getLenis } from '$lib/motion/smoothScroll';
 	import { runAfterInitialPaint } from '$lib/motion/defer';
 
 	let root: HTMLElement;
 	let bg: HTMLDivElement;
-	let spot: HTMLDivElement;
-	let orbA: HTMLDivElement;
-	let orbB: HTMLDivElement;
 
-	// Backdrop auto-carousel (cross-fade + Ken Burns zoom).
-	const slides = ['/bg1.webp', '/slid3.webp', '/slide5.webp', '/slide4.webp', '/slide2.webp'];
+	// Backdrop reel, cut like a title sequence: each shot changes scale AND
+	// brightness from the one before it, so the loop never reads as "more crowd".
+	// Footage: Pexels and Mixkit (both licensed for commercial use, no attribution
+	// required), trimmed to 6s at 720p — the whole reel is 6.3MB, and only the
+	// first clip is fetched on load.
+	const clips = [
+		{ src: '/video/crowd.mp4', poster: '/video/crowd.jpg' }, // close, dark: the crowd, slow motion
+		{ src: '/video/shoulders.mp4', poster: '/video/shoulders.jpg' }, // wide, bright: on shoulders
+		{ src: '/video/singer.mp4', poster: '/video/singer.jpg' }, // stage: the artist, mid-song
+		{ src: '/video/phones.mp4', poster: '/video/phones.jpg' }, // wide, dark: arena of phone lights
+		{ src: '/video/cheering.mp4', poster: '/video/cheering.jpg' }, // close, bright: faces cheering
+		{ src: '/video/confetti.mp4', poster: '/video/confetti.jpg' } // burst: confetti over the stage
+	];
+	// Crossfade length, and how far from the end of a clip the handoff starts.
+	// The lead has to exceed the fade so the outgoing clip is still moving for the
+	// whole dissolve; `timeupdate` only fires about four times a second, so the
+	// extra 250ms absorbs that jitter.
+	const FADE_MS = 800;
+	const HANDOFF_LEAD = FADE_MS / 1000 + 0.45;
+
 	let current = $state(0);
-	// Lazy-load backdrops: fetch only the current + next slide (and keep ones already
-	// shown) instead of pulling all five (~600KB) on mount. Seeded with 0 (the preloaded
-	// LCP image); the next slide is warmed after the first paint.
-	let loaded = $state(new Set<number>([0]));
+	// Video is opt-in, decided after the first paint: the poster carries the LCP,
+	// and reduced-motion / Save-Data visitors never pay for the download at all.
+	let playing = $state(false);
+	// Set once the first clip is actually rolling, which is when the poster can
+	// step aside — left underneath, it bleeds through mid-crossfade when both
+	// clips sit at partial opacity.
+	let rolling = $state(false);
+	// Only mounted clips get a `src`, so we fetch the current one plus the next
+	// instead of pulling all six (~6MB) up front. The next one is always mounted
+	// a whole clip ahead: it has to be buffered before the crossfade starts, or
+	// it arrives on the screen still sitting on its first frame.
+	let mounted = $state(new Set<number>([0, 1]));
+	let els = $state<(HTMLVideoElement | undefined)[]>([]);
+	let handingOff = false;
+	let parkTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function videoAllowed() {
+		if (prefersReducedMotion()) return false;
+		const conn = (
+			navigator as Navigator & {
+				connection?: { saveData?: boolean; effectiveType?: string };
+			}
+		).connection;
+		if (conn?.saveData) return false;
+		if (conn?.effectiveType && /(^|-)2g$/.test(conn.effectiveType)) return false;
+		return true;
+	}
+
+	// Hand the frame to the next clip. The incoming clip is started *before* the
+	// opacity flip, and the outgoing one keeps playing underneath until the fade
+	// is over, so the dissolve happens between two moving images. Advancing on
+	// `ended` instead would freeze the last frame for the length of the fade.
+	/** Resolve once the element can actually render frames, or bail after `ms`. */
+	function whenPlayable(v: HTMLVideoElement, ms = 1000) {
+		if (v.readyState >= 3) return Promise.resolve();
+		return new Promise<void>((resolve) => {
+			const done = () => {
+				v.removeEventListener('canplay', done);
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(done, ms);
+			v.addEventListener('canplay', done);
+		});
+	}
+
+	async function handoff(from: number) {
+		if (handingOff || from !== current) return;
+		handingOff = true;
+		if (parkTimer) clearTimeout(parkTimer);
+
+		const next = (from + 1) % clips.length;
+		const incoming = els[next];
+
+		// Get the incoming clip genuinely rolling before anything fades. Flipping
+		// first would dissolve into a still frame, which is the whole bug this
+		// ordering exists to avoid.
+		if (incoming) {
+			await whenPlayable(incoming);
+			incoming.currentTime = 0;
+			await incoming.play().catch(() => {});
+		}
+
+		current = next;
+		// Warm the clip after this one so the next handoff has the same head start.
+		mounted = new Set(mounted).add((next + 1) % clips.length);
+
+		// The outgoing clip keeps playing underneath for the length of the fade.
+		parkTimer = setTimeout(() => {
+			const outgoing = els[from];
+			if (outgoing && from !== current) {
+				outgoing.pause();
+				outgoing.currentTime = 0;
+			}
+			handingOff = false;
+		}, FADE_MS);
+	}
+
+	function onTimeupdate(i: number) {
+		if (i !== current || handingOff) return;
+		const v = els[i];
+		if (!v || !Number.isFinite(v.duration)) return;
+		if (v.duration - v.currentTime <= HANDOFF_LEAD) handoff(i);
+	}
+
+	// Start the reel once; every transition after that is driven by handoff().
+	let kickedOff = false;
+	$effect(() => {
+		if (!playing || kickedOff) return;
+		const first = els[current];
+		if (!first) return;
+		kickedOff = true;
+		first
+			.play()
+			.then(() => {
+				rolling = true;
+			})
+			.catch(() => {
+				kickedOff = false;
+			});
+	});
 
 	function scrollTo(e: MouseEvent, href: string) {
 		const target = document.querySelector(href);
@@ -38,7 +150,6 @@
 
 		const cancel = runAfterInitialPaint(async () => {
 			const reduce = prefersReducedMotion();
-			const fine = window.matchMedia('(pointer: fine)').matches;
 			const desktop = window.matchMedia('(min-width: 769px)').matches;
 			const [{ gsap }, { ScrollTrigger }] = await Promise.all([
 				import('gsap'),
@@ -48,18 +159,22 @@
 			if (disposed) return;
 
 			gsap.registerPlugin(ScrollTrigger);
-			loaded = new Set(loaded).add(1);
+			playing = videoAllowed();
 
 			const ctx = gsap.context(() => {
-				// Entrance choreography (skip when reduced — elements stay at rest).
+				// Entrance choreography: the promise, then the way in. The headline
+				// runs itself via the `reveal` action (word-by-word clip).
 				if (!reduce) {
 					const tl = gsap.timeline({ defaults: { ease: 'power3.out', duration: 0.9 } });
-					tl.from('.badge', { y: 18, autoAlpha: 0 }, 0.1)
-						.from('.cta-btn', { y: 22, autoAlpha: 0, stagger: 0.1 }, 0.45)
-						.from('.float', { y: 28, autoAlpha: 0, scale: 0.94, stagger: 0.15 }, 0.6);
+					tl.from('.sub', { y: 20, autoAlpha: 0 }, 0.45).from(
+						'.cta-btn',
+						{ y: 22, autoAlpha: 0, stagger: 0.09 },
+						0.6
+					);
 				}
 
-				// Parallax on the backdrop while scrolling.
+				// Backdrop drifts slower than the page, so the crowd keeps its depth
+				// as the copy scrolls off it.
 				if (!reduce && desktop) {
 					gsap.to(bg, {
 						yPercent: 18,
@@ -67,70 +182,14 @@
 						scrollTrigger: { trigger: root, start: 'top top', end: 'bottom top', scrub: true }
 					});
 				}
-
-				// Slow drifting glow orbs.
-				if (!reduce) {
-					gsap.to(orbA, {
-						xPercent: 12,
-						yPercent: -14,
-						duration: 11,
-						ease: 'sine.inOut',
-						repeat: -1,
-						yoyo: true
-					});
-					gsap.to(orbB, {
-						xPercent: -16,
-						yPercent: 10,
-						duration: 13,
-						ease: 'sine.inOut',
-						repeat: -1,
-						yoyo: true
-					});
-				}
 			}, root);
 
-			// Auto-advance the backdrop carousel (skip when reduced — static image).
-			let slideTimer: ReturnType<typeof setInterval> | undefined;
-			if (!reduce) {
-				slideTimer = setInterval(() => {
-					current = (current + 1) % slides.length;
-					// Warm the slide after this one so its cross-fade is ready in time.
-					loaded = new Set(loaded).add(current).add((current + 1) % slides.length);
-				}, 6000);
-			}
-
-			// Cursor-tracked spotlight + card depth parallax.
-			let onMove: ((e: PointerEvent) => void) | null = null;
-			if (!reduce && fine && desktop) {
-				gsap.set(spot, { autoAlpha: 1 });
-				const xS = gsap.quickTo(spot, 'x', { duration: 0.9, ease: 'power3' });
-				const yS = gsap.quickTo(spot, 'y', { duration: 0.9, ease: 'power3' });
-				const cards = gsap.utils.toArray<HTMLElement>('.float', root);
-				const movers = cards.map((c) => ({
-					x: gsap.quickTo(c, 'x', { duration: 1, ease: 'power3' }),
-					y: gsap.quickTo(c, 'y', { duration: 1, ease: 'power3' }),
-					depth: Number(c.dataset.depth ?? 20)
-				}));
-
-				onMove = (e: PointerEvent) => {
-					const r = root.getBoundingClientRect();
-					const px = e.clientX - r.left;
-					const py = e.clientY - r.top;
-					xS(px);
-					yS(py);
-					const nx = px / r.width - 0.5;
-					const ny = py / r.height - 0.5;
-					for (const m of movers) {
-						m.x(-nx * m.depth);
-						m.y(-ny * m.depth);
-					}
-				};
-				root.addEventListener('pointermove', onMove);
-			}
+			// Clips advance on `ended` rather than on a timer, so a cut never lands
+			// mid-shot and a stalled download just holds the frame it is on.
 
 			cleanup = () => {
-				if (onMove) root.removeEventListener('pointermove', onMove);
-				if (slideTimer) clearInterval(slideTimer);
+				if (parkTimer) clearTimeout(parkTimer);
+				for (const v of els) v?.pause();
 				ctx.revert();
 			};
 		});
@@ -144,87 +203,89 @@
 </script>
 
 <section id="top" class="hero" bind:this={root}>
-	<div class="bg" bind:this={bg}>
-		{#each slides as src, i (src)}
-			<div
-				class="slide"
-				class:active={i === current}
-				style={loaded.has(i) ? `background-image: url(${src})` : ''}
-				aria-hidden="true"
-			></div>
-		{/each}
+	<div class="bg" class:rolling bind:this={bg} aria-hidden="true">
+		<!-- Always painted: carries the LCP and is the whole backdrop for anyone who
+		     never gets video (reduced motion, Save-Data, decode failure). -->
+		<img class="poster" src={clips[0].poster} alt="" fetchpriority="high" />
+		{#if playing}
+			{#each clips as clip, i (clip.src)}
+				<video
+					class="clip"
+					class:active={i === current}
+					bind:this={els[i]}
+					src={mounted.has(i) ? clip.src : undefined}
+					poster={clip.poster}
+					preload={mounted.has(i) ? 'auto' : 'none'}
+					muted
+					playsinline
+					ontimeupdate={() => onTimeupdate(i)}
+					onended={() => handoff(i)}
+				></video>
+			{/each}
+		{/if}
 	</div>
 	<div class="overlay"></div>
 	<div class="grain" aria-hidden="true"></div>
 	<div class="particles" aria-hidden="true">
 		<AmbientParticles variant="fill" count={9} intensity={1.05} />
 	</div>
-	<div class="orb orb-gold" bind:this={orbA} aria-hidden="true"></div>
-	<div class="orb orb-cool" bind:this={orbB} aria-hidden="true"></div>
-	<div class="spot" bind:this={spot} aria-hidden="true"></div>
 
+	<!-- Title card, anchored to the bottom of the frame so the photograph keeps
+	     its subject and the copy reads as a caption on it, not a box over it. -->
 	<div class="content">
-		<span class="badge"><i class="dot"></i>{heroBadge}</span>
-
 		{#key audience.value}
 			<div class="swap" in:fade={{ duration: 320 }}>
-				<p class="kicker">{hero[audience.value].kicker}</p>
-				<KineticHeading lines={hero[audience.value].heading} />
+				<KineticHeading lines={hero[audience.value].heading} accentFrom={1} />
 				<p class="sub">{hero[audience.value].sub}</p>
 			</div>
 		{/key}
 
 		<div class="ctas">
 			<a class="cta-btn primary" href="#waitlist" onclick={(e) => scrollTo(e, '#waitlist')}>
-				<span>Join the waitlist</span>
+				Join the waitlist
 			</a>
 			<a class="cta-btn ghost" href="#how" onclick={(e) => scrollTo(e, '#how')}>See how it works</a>
 		</div>
-	</div>
 
-	<!-- Floating cards (decorative; the message is in the copy above). -->
-	<aside class="float card-perks" data-depth="32" aria-hidden="true">
+		<!-- Role self-selection lives here rather than in the nav: it is a change of
+		     perspective on this copy, not a destination. -->
 		{#key audience.value}
-			<div class="swap-perks" in:fade={{ duration: 280 }}>
-				<span class="tag">{heroPerks[audience.value].title}</span>
-				<ul class="perks">
-					{#each heroPerks[audience.value].items as item (item)}
-						<li>
-							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
-								<path d="M5 13l4 4 10-11" stroke-linecap="round" stroke-linejoin="round" />
-							</svg>{item}
-						</li>
-					{/each}
-				</ul>
-			</div>
+			<button
+				class="switch"
+				type="button"
+				onclick={() => audience.toggle()}
+				in:fade={{ duration: 240 }}
+			>
+				<span class="switch-prompt">{audienceSwitch[audience.value].prompt}</span>
+				<span class="switch-action">{audienceSwitch[audience.value].action}</span>
+				<svg
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="1.8"
+					aria-hidden="true"
+					><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" /></svg
+				>
+			</button>
 		{/key}
-	</aside>
-
-	<aside class="float card-split" data-depth="20" aria-hidden="true">
-		<span class="cap">Every subscription</span>
-		<div class="flow">
-			<span class="amt in">$1.00</span>
-			<svg viewBox="0 0 24 24" class="arrow" fill="none" stroke="currentColor" stroke-width="2">
-				<path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
-			</svg>
-			<span class="amt out">$0.80</span>
-		</div>
-		<small>straight to the artist</small>
-	</aside>
-
-	<a class="cue" href="#how" onclick={(e) => scrollTo(e, '#how')} aria-label="Scroll down">
-		<span></span>
-	</a>
+	</div>
 </section>
 
 <style lang="scss">
 	.hero {
+		/* Backdrop grade: kill the venue's hue, re-tint to brand gold. */
+		--grade: grayscale(1) sepia(0.62) saturate(2.3) hue-rotate(-9deg) contrast(1.06)
+			brightness(0.92);
+
 		position: relative;
 		min-height: 100dvh;
-		display: flex;
-		align-items: center;
+		display: grid;
+		align-content: end;
 		overflow: hidden;
-		padding: clamp(5.5rem, 11vh, 8rem) clamp(1.25rem, 5vw, 4rem) clamp(3rem, 7vh, 5rem);
+		/* Top padding only has to clear the nav — the title card is bottom-anchored.
+		   Keeping it small matters: if padding + content ever exceeds 100dvh the hero
+		   grows past the fold and takes the CTAs with it. */
+		padding: clamp(5.5rem, 10vh, 7.5rem) clamp(1.25rem, 5vw, 4rem) clamp(3rem, 7.5vh, 6rem);
 	}
 
 	/* ── Backdrop layers ─────────────────────────────── */
@@ -235,55 +296,60 @@
 		z-index: 0;
 		will-change: transform;
 	}
-	.slide {
+	.poster,
+	.clip {
 		position: absolute;
 		inset: 0;
-		background: center / cover no-repeat;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		/* Stock concert footage arrives in whatever colour the venue's lighting rig
+		   was running — cyan, magenta, green. Stripping the hue and re-tinting to
+		   brand gold is what keeps one accent across every frame, and it is also
+		   what stops the reel from reading as generic stock. */
+		filter: var(--grade);
+	}
+	.clip {
 		opacity: 0;
-		transform: scale(1.04);
-		/* slow reverse on the outgoing slide so it never snaps back */
-		transition:
-			opacity 2.4s ease-in-out,
-			transform 16s linear;
-		will-change: opacity, transform;
+		/* Linear on both sides so the two clips sum evenly through the dissolve.
+		   Must stay in step with FADE_MS in the script. */
+		transition: opacity 800ms linear;
 	}
-	.slide.active {
+	/* Once video is rolling the poster is redundant, and leaving it lit shows
+	   through the middle of every crossfade. */
+	.bg.rolling .poster {
+		opacity: 0;
+		transition: opacity 600ms linear;
+	}
+	.clip.active {
 		opacity: 1;
-		transform: scale(1.16);
-		/* linear, constant zoom across the whole life of the slide */
-		transition:
-			opacity 2.4s ease-in-out,
-			transform 8s linear;
 	}
-	@media (prefers-reduced-motion: reduce) {
-		.slide,
-		.slide.active {
-			transform: none;
-			transition: opacity 2.4s ease-in-out;
-		}
-	}
+
+	/* Cinematic scrim: weighted to the bottom where the title card sits, light
+	   enough at the top that the crowd stays the subject rather than wallpaper.
+	   The first layer is a pool anchored under the copy — the backdrop rotates
+	   through frames as bright as a confetti burst, and a global darkening heavy
+	   enough for those would flatten every other frame. */
 	.overlay {
 		position: absolute;
 		inset: 0;
 		z-index: 1;
 		background:
-			/* seat the top-right card without crushing the photo */
-			radial-gradient(90% 70% at 82% 6%, rgba(10, 10, 11, 0.48), transparent 60%),
-			/* darken the left text column for legibility */
-				linear-gradient(
-					90deg,
-					rgba(10, 10, 11, 0.78) 0%,
-					rgba(10, 10, 11, 0.34) 42%,
-					transparent 70%
-				),
-			/* gentle bottom fade into the page */
-				linear-gradient(
-					180deg,
-					rgba(10, 10, 11, 0.24) 0%,
-					rgba(10, 10, 11, 0.32) 50%,
-					rgba(10, 10, 11, 0.84) 90%,
-					var(--bg) 100%
-				);
+			radial-gradient(78% 62% at 20% 90%, rgba(10, 10, 11, 0.58), transparent 74%),
+			linear-gradient(
+				180deg,
+				transparent 26%,
+				rgba(10, 10, 11, 0.5) 58%,
+				rgba(10, 10, 11, 0.9) 86%,
+				var(--bg) 100%
+			),
+			linear-gradient(
+				100deg,
+				rgba(10, 10, 11, 0.62) 0%,
+				rgba(10, 10, 11, 0.18) 46%,
+				transparent 74%
+			),
+			radial-gradient(125% 95% at 50% 42%, transparent 52%, rgba(10, 10, 11, 0.34) 100%);
 	}
 	.particles {
 		position: absolute;
@@ -300,42 +366,6 @@
 		mix-blend-mode: overlay;
 		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 	}
-	.orb {
-		position: absolute;
-		z-index: 1;
-		border-radius: 50%;
-		filter: blur(70px);
-		pointer-events: none;
-		will-change: transform;
-	}
-	.orb-gold {
-		top: 18%;
-		left: 8%;
-		width: min(560px, 60vw);
-		height: min(560px, 60vw);
-		background: radial-gradient(closest-side, rgba(255, 216, 119, 0.34), transparent 70%);
-	}
-	.orb-cool {
-		bottom: 6%;
-		right: 4%;
-		width: min(520px, 56vw);
-		height: min(520px, 56vw);
-		background: radial-gradient(closest-side, rgba(124, 152, 255, 0.22), transparent 70%);
-	}
-	.spot {
-		position: absolute;
-		left: 0;
-		top: 0;
-		width: 640px;
-		height: 640px;
-		margin: -320px 0 0 -320px;
-		z-index: 1;
-		opacity: 0;
-		visibility: hidden;
-		pointer-events: none;
-		background: radial-gradient(closest-side, rgba(255, 216, 119, 0.16), transparent 72%);
-		will-change: transform;
-	}
 
 	/* ── Content ─────────────────────────────────────── */
 	.content {
@@ -345,82 +375,50 @@
 		width: 100%;
 		margin: 0 auto;
 	}
-	.badge {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.55rem;
-		padding: 0.45rem 0.9rem;
-		border-radius: 999px;
-		border: 1px solid var(--line);
-		background: rgba(255, 255, 255, 0.04);
-		backdrop-filter: blur(8px);
-		font-size: 0.78rem;
-		letter-spacing: 0.5px;
-		color: var(--text-muted);
-		margin-bottom: 1.6rem;
-	}
-	.dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--gold);
-		box-shadow: 0 0 0 0 rgba(255, 216, 119, 0.55);
-		animation: pulse 2.4s ease-out infinite;
-	}
-	@keyframes pulse {
-		0% {
-			box-shadow: 0 0 0 0 rgba(255, 216, 119, 0.5);
-		}
-		70%,
-		100% {
-			box-shadow: 0 0 0 9px rgba(255, 216, 119, 0);
-		}
-	}
-
-	.kicker {
-		text-transform: uppercase;
-		letter-spacing: 4px;
-		font-size: 0.8rem;
-		color: var(--gold);
-		margin-bottom: 1rem;
-	}
-
-	/* Bold grotesque headline — reads strong at large display sizes. */
+	/* Bold grotesque headline in flat brand colour — the photograph carries the
+	   richness, so the type stays a single confident weight. */
 	.hero :global(.kinetic) {
 		font-family: 'Sora', var(--font-sans);
 		font-style: normal;
 		font-weight: 800;
-		letter-spacing: -0.025em;
-		line-height: 1.04;
+		/* Scaled against the shorter axis too: on a low window (or a 125% zoom, which
+		   is the same thing in CSS pixels) a width-only clamp overruns the fold. */
+		font-size: clamp(2.4rem, min(8vw, 13vh), 6.8rem);
+		letter-spacing: -0.035em;
+		line-height: 1;
+		color: var(--text);
+		text-wrap: balance;
 	}
-	/* Restore a comfortable gap between words (KineticHeading strips the space). */
+	/* Comfortable word gap (KineticHeading strips the space) plus descender
+	   clearance — the clip-reveal box would otherwise cut the g in "belonging".
+	   The negative margin pulls the lines back to a display-tight rhythm without
+	   shrinking that box, so nothing gets cropped. */
 	.hero :global(.kinetic .word-wrap) {
-		padding-right: 0.3em;
+		padding: 0 0.26em 0.16em 0;
+		margin-bottom: -0.22em;
 	}
-	/* Metallic editorial sheen on the kinetic headline. */
-	.hero :global(.kinetic .word) {
-		background: linear-gradient(180deg, #fdf6e7 0%, #efe2cc 52%, #d9ad4e 100%);
-		-webkit-background-clip: text;
-		background-clip: text;
-		color: transparent;
-		-webkit-text-fill-color: transparent;
+	/* The payoff line carries the single accent colour on the page. */
+	.hero :global(.kinetic .line.accent) {
+		color: var(--gold);
 	}
 
 	.sub {
-		color: var(--text-muted);
-		font-size: clamp(1.05rem, 2vw, 1.3rem);
-		max-width: 52ch;
-		margin-top: 1.5rem;
+		/* Lifted above --text-muted: this paragraph sits on photography, not on a
+		   flat surface, so the token's 0.62 alpha drops near 4.5:1 over lit frames. */
+		color: rgba(244, 236, 224, 0.8);
+		font-size: clamp(1.02rem, 1.6vw, 1.28rem);
+		line-height: 1.55;
+		max-width: 48ch;
+		margin-top: 1.4rem;
 	}
 
 	.ctas {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 1rem;
-		margin-top: 2.5rem;
+		margin-top: 2.4rem;
 	}
 	.cta-btn {
-		position: relative;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -429,7 +427,6 @@
 		border-radius: 999px;
 		font-weight: 700;
 		font-size: 1rem;
-		overflow: hidden;
 		transition:
 			transform var(--dur-base) var(--ease-out),
 			filter var(--dur-base) var(--ease-out),
@@ -439,194 +436,115 @@
 	.primary {
 		background: linear-gradient(135deg, #ffe6a0 0%, var(--gold) 45%, var(--gold-deep) 100%);
 		color: #1a1a1a;
-		box-shadow: 0 14px 44px -12px var(--glow);
-		span {
-			position: relative;
-			z-index: 1;
-		}
-		/* shimmer sweep */
-		&::after {
-			content: '';
-			position: absolute;
-			inset: 0;
-			transform: translateX(-120%);
-			background: linear-gradient(
-				100deg,
-				transparent 30%,
-				rgba(255, 255, 255, 0.55) 50%,
-				transparent 70%
-			);
-		}
+		box-shadow: 0 14px 44px -14px var(--glow);
 		&:hover {
 			transform: translateY(-2px);
-			filter: brightness(1.04);
+			filter: brightness(1.05);
 		}
-		&:hover::after {
-			transition: transform 0.85s var(--ease-out);
-			transform: translateX(120%);
+		&:active {
+			transform: translateY(0);
 		}
 	}
 	.ghost {
 		border: 1px solid var(--line);
 		color: var(--text);
 		font-weight: 500;
-		background: rgba(255, 255, 255, 0.02);
+		background: rgba(255, 255, 255, 0.03);
+		backdrop-filter: blur(10px);
 		&:hover {
 			transform: translateY(-2px);
 			border-color: var(--gold);
-			background: rgba(255, 216, 119, 0.07);
+			background: rgba(255, 216, 119, 0.08);
+		}
+		&:active {
+			transform: translateY(0);
 		}
 	}
 
-	/* ── Floating glass cards ────────────────────────── */
-	.float {
-		position: absolute;
-		z-index: 3;
-		border-radius: 18px;
-		border: 1px solid rgba(255, 255, 255, 0.12);
-		background: rgba(20, 20, 26, 0.55);
-		backdrop-filter: blur(16px);
-		box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.7);
-		padding: 1rem 1.1rem;
-		will-change: transform;
-	}
-	.tag {
-		display: inline-block;
-		font-size: 0.7rem;
-		letter-spacing: 1.2px;
-		text-transform: uppercase;
-		color: var(--gold);
-	}
-	.card-perks {
-		top: 16%;
-		right: clamp(2rem, 6vw, 5rem);
-		width: 250px;
-		animation: floaty 7s ease-in-out infinite;
-		.perks {
-			list-style: none;
-			margin: 0.7rem 0 0;
-			padding: 0;
-			display: flex;
-			flex-direction: column;
-			gap: 0.55rem;
-			li {
-				display: flex;
-				align-items: center;
-				gap: 0.55rem;
-				font-size: 0.88rem;
-				color: var(--text);
-				svg {
-					width: 16px;
-					height: 16px;
-					flex: none;
-					color: var(--gold);
-				}
+	/* Quiet by design: it must not compete with the waitlist CTA above it. */
+	.switch {
+		/* Block-level rather than inline-flex: as an inline box it sat on the CTA
+		   row's baseline, which both ate into the gap and left it reading as a
+		   caption hanging off the buttons instead of its own control. */
+		display: flex;
+		width: fit-content;
+		align-items: center;
+		gap: 0.5rem;
+		/* Its own hit area, pulled back by the same amount so the label still
+		   lines up with the left edge of the buttons above. */
+		margin: 2.5rem 0 0 -0.75rem;
+		padding: 0.5rem 0.75rem;
+		border: 0;
+		border-radius: 999px;
+		background: none;
+		cursor: pointer;
+		font-family: var(--font-sans);
+		font-size: 0.95rem;
+		color: rgba(244, 236, 224, 0.7);
+		transition: background var(--dur-base) var(--ease-out);
+
+		svg {
+			width: 16px;
+			height: 16px;
+			transition:
+				transform var(--dur-base) var(--ease-out),
+				color var(--dur-base) var(--ease-out);
+		}
+
+		&:hover,
+		&:focus-visible {
+			background: rgba(255, 255, 255, 0.05);
+
+			.switch-action {
+				color: var(--gold);
+				text-decoration-color: var(--gold);
+			}
+			svg {
+				transform: translateX(3px);
+				color: var(--gold);
 			}
 		}
-	}
-	.card-split {
-		bottom: 20%;
-		right: clamp(7rem, 16vw, 14rem);
-		width: 220px;
-		animation: floaty 8.5s ease-in-out infinite reverse;
-		.cap {
-			font-size: 0.72rem;
-			letter-spacing: 0.5px;
-			color: var(--text-muted);
-		}
-		.flow {
-			display: flex;
-			align-items: center;
-			gap: 0.6rem;
-			margin: 0.5rem 0 0.4rem;
-		}
-		.amt {
-			font-family: var(--font-display);
-			font-size: 1.45rem;
-			font-weight: 600;
-			font-variant-numeric: tabular-nums;
-		}
-		.in {
-			color: var(--text-muted);
-		}
-		.out {
-			color: var(--gold);
-		}
-		.arrow {
-			width: 22px;
-			height: 22px;
-			color: var(--gold);
-		}
-		small {
-			font-size: 0.76rem;
-			color: var(--text-muted);
+
+		&:focus-visible {
+			outline: 2px solid var(--gold);
+			outline-offset: 2px;
 		}
 	}
-	@keyframes floaty {
-		0%,
-		100% {
-			translate: 0 0;
-		}
-		50% {
-			translate: 0 -12px;
-		}
-	}
-	/* ── Scroll cue ──────────────────────────────────── */
-	.cue {
-		position: absolute;
-		bottom: 1.5rem;
-		left: 50%;
-		transform: translateX(-50%);
-		z-index: 3;
-		width: 26px;
-		height: 42px;
-		border: 2px solid var(--text-muted);
-		border-radius: 999px;
-		display: flex;
-		justify-content: center;
-		span {
-			width: 4px;
-			height: 8px;
-			margin-top: 7px;
-			background: var(--gold);
-			border-radius: 2px;
-			animation: cue 1.6s ease-in-out infinite;
-		}
-	}
-	@keyframes cue {
-		0%,
-		100% {
-			transform: translateY(0);
-			opacity: 1;
-		}
-		50% {
-			transform: translateY(10px);
-			opacity: 0.3;
-		}
+	.switch-action {
+		color: var(--text);
+		font-weight: 500;
+		text-decoration: underline;
+		text-decoration-color: rgba(244, 236, 224, 0.3);
+		text-underline-offset: 4px;
+		transition:
+			color var(--dur-base) var(--ease-out),
+			text-decoration-color var(--dur-base) var(--ease-out);
 	}
 
-	/* ── Responsive ──────────────────────────────────── */
-	@media (max-width: 1100px) {
-		.card-split {
-			display: none;
+	@media (max-width: 768px) {
+		.ctas {
+			gap: 0.75rem;
 		}
-		.card-perks {
-			top: 9%;
-			right: clamp(1rem, 4vw, 3rem);
+		.cta-btn {
+			flex: 1 1 100%;
 		}
-	}
-	@media (max-width: 880px) {
-		.float {
-			display: none;
+		.switch {
+			/* The CTAs go full-width here, so a left-hugging link underneath reads as
+			   detached from them. Centred, it belongs to the stack. */
+			margin: 1.75rem auto 0;
+			font-size: 0.9rem;
 		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {
-		.dot,
-		.cue span,
-		.card-perks,
-		.card-split {
-			animation: none;
+		.switch svg {
+			transition: none;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.cta-btn {
+			transition: none;
 		}
 	}
 </style>
