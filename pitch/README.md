@@ -57,21 +57,35 @@ adjust to taste:
 The TAM/SAM/SOM figures (slide 3) are each sourced separately — verify the actual
 report content before reusing a number, not just the title:
 
-- **TAM $39.5B** — global recorded music revenue, 2025 (+9.4% YoY), **MIDiA Research**.
-  Narrower than a generic "creator economy" TAM, but music-specific and directly
-  defensible — this is the pie PDM's model actually competes for. (The broader
-  all-content-types creator economy, ~$250B per Grand View Research/Precedence
-  Research 2025, is cited only as context in the body copy now, not as the TAM row.)
+- **TAM $4.5B** — Goldman Sachs' superfan-monetization figure ("Music in the Air").
+  **Verified 2026-08-28 — read this before quoting it:** it is a *potential annual
+  revenue uplift*, NOT current superfan spending. Goldman models it as 20% of paid
+  streaming subscribers (mirroring Luminate's US superfan share) spending ~2x the
+  average subscriber, spanning premium tiers, live and physical; Tencent Music's
+  Super VIP tier (~2.5x premium price) is their reference implementation. The figure
+  was $4.2B in 2023, raised to $4.5B in 2024, and quoted as ~$4.3B against 2026
+  projections. Goldman expects ~10% captured by 2025 and ~60% by 2030 ($3.3B
+  incremental, a 13% uplift to paid streaming revenue).
+  **So describe it as an opportunity, never as "the market today"**, and say the
+  quiet part out loud: Goldman parks that money in a premium streaming tier, PDM's
+  bet is that it lands direct-to-artist instead. Disagreeing with the mechanism
+  while borrowing the sizing is stronger than borrowing both.
+- **Global recorded music $39.5B** (2025, +9.4% YoY, MIDiA Research) is now **body
+  copy, not the TAM row** — changed 2026-08-28. A fan's $1 to PDM does not cancel
+  their Spotify subscription, so PDM's revenue is additive to that pie rather than
+  taken from it; it fails the "if we owned 100% of our market, would this money
+  reach us?" test. It earns its place as *why now* context instead: expanded rights
+  is the fastest-growing segment at +21.5% and streaming grew slower than the total
+  market for the first time. (Same reasoning previously demoted the ~$250B
+  all-content creator economy, per Grand View / Precedence 2025 — this is that move
+  applied one level down.)
 - **SAM $400M** — PDM-addressable superfan spend, our own bottom-up estimate: ~10% of
   MIDiA's verified **8.2M** self-releasing-artist base (≈820k artists PDM could
   realistically reach) × ~40 avg. superfans/artist × $12/yr each (820k × 40 × $12 ≈
   $393.6M ≈ $400M — recompute this yourself before reusing it, the "$40/yr" phrasing
-  in an earlier draft was wrong and didn't reconcile). This is narrower than
-  Goldman Sachs' broader **$4.5B** "superfan monetization" figure ("Music in the Air"
-  2024) on purpose — Goldman's number spans major-label artist fanbases too, which
-  aren't PDM's beachhead segment. Cite Goldman's $4.5B as external validation/context,
-  not as PDM's own SAM.
-- **SOM $6.5M** — ≈1.6% of the $400M SAM by end of Y3. Bottom-up funnel (PDM's own
+  in an earlier draft was wrong and didn't reconcile). Note the funnel now reads
+  **8.9% of TAM** rather than 1.0%; nothing about SAM changed, only the denominator.
+  A SAM that is a rounding error of TAM is a symptom of an inflated TAM.- **SOM $6.5M** — ≈1.6% of the $400M SAM by end of Y3. Bottom-up funnel (PDM's own
   planning assumption, not an external figure — label it as such):
   - Y1: ~400 artists × ~15 avg. paying superfans → ~6,000 subscribers → ~$72K GMV/yr
   - Y2: ~2,500 artists × ~30 avg. → ~75,000 subscribers → ~$900K GMV/yr
