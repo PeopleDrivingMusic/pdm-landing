@@ -15,6 +15,13 @@ export const hero: Record<Audience, { kicker: string; heading: string[]; sub: st
 
 export const heroBadge = 'Early access · waitlist open';
 
+/** Hero cross-link that flips the page to the other perspective. The key is the
+ *  audience currently being shown; the copy offers the opposite side. */
+export const audienceSwitch: Record<Audience, { prompt: string; action: string }> = {
+	fan: { prompt: 'Making music?', action: 'See the artist side' },
+	artist: { prompt: 'Just here to listen?', action: 'See the fan side' }
+};
+
 export const heroPerks: Record<Audience, { title: string; items: string[] }> = {
 	fan: {
 		title: 'Paid subscription unlocks',

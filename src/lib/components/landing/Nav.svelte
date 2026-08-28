@@ -64,7 +64,8 @@
 	</nav>
 
 	<div class="right">
-		<div class="toggle-wrap"><AudienceToggle size="sm" /></div>
+		<!-- Role selection lives in the hero, not here: a second gold pill beside the
+		     waitlist CTA split the nav's single accent between two competing controls. -->
 		<a class="cta" href="#waitlist" onclick={(e) => nav(e, '#waitlist')}>Join the waitlist</a>
 		<button
 			class="burger"
@@ -85,7 +86,12 @@
 			{#each links as link, i (link.href)}
 				<a href={link.href} style="--i:{i}" onclick={(e) => nav(e, link.href)}>
 					<span>{link.label}</span>
-					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"
+					<svg
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.8"
+						aria-hidden="true"
 						><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" /></svg
 					>
 				</a>
@@ -278,8 +284,7 @@
 		}
 	}
 	@media (max-width: 768px) {
-		.links,
-		.toggle-wrap {
+		.links {
 			display: none;
 		}
 		.nav > .right > .cta {
