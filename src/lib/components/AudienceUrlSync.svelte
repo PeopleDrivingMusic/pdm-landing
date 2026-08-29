@@ -11,23 +11,20 @@
 	let initialized = $state(false);
 
 	onMount(() => {
-		// Priority: ?for= query param -> localStorage -> existing default ('fan').
+		// Priority: ?for= query param -> localStorage -> 'fan'. Anything that fails
+		// to parse, at any step, lands on 'fan' rather than leaving the store
+		// unset: showing the wrong audience beats showing a hero with no copy.
 		let resolved: Audience | null = null;
 
-		const fromUrl = parseAudience(new URLSearchParams(window.location.search).get(PARAM));
-		if (fromUrl) {
-			resolved = fromUrl;
-		} else {
-			try {
-				resolved = parseAudience(window.localStorage.getItem(STORAGE_KEY));
-			} catch {
-				resolved = null;
-			}
+		try {
+			const fromUrl = parseAudience(new URLSearchParams(window.location.search).get(PARAM));
+			resolved = fromUrl ?? parseAudience(window.localStorage.getItem(STORAGE_KEY));
+		} catch {
+			// Malformed query string, or storage unavailable in private mode.
+			resolved = null;
 		}
 
-		if (resolved) {
-			audience.set(resolved);
-		}
+		audience.set(resolved ?? 'fan');
 
 		initialized = true;
 	});
