@@ -40,17 +40,31 @@ export const reveal: Action<HTMLElement, RevealOptions | undefined> = (node, opt
 		node.style.willChange = '';
 	};
 
+	// Fail-safe: content that never becomes visible is never an acceptable
+	// outcome, so the reveal cannot hinge solely on the observer reporting back.
+	// If nothing has shown the node by the time the entrance would long since
+	// have finished, show it regardless.
+	const FAILSAFE = delay + DURATION + 1200;
+	let shown = false;
+
 	const show = () => {
+		shown = true;
+		clearTimeout(failsafeTimer);
 		node.style.opacity = '1';
 		node.style.transform = 'translateY(0)';
 		if (once) settleTimer = setTimeout(settle, delay + DURATION + 60);
 	};
 	const hide = () => {
+		shown = false;
 		if (settleTimer) clearTimeout(settleTimer);
 		node.style.willChange = 'opacity, transform';
 		node.style.opacity = '0';
 		node.style.transform = `translateY(${y}px)`;
 	};
+
+	const failsafeTimer = setTimeout(() => {
+		if (!shown) show();
+	}, FAILSAFE);
 
 	const io = new IntersectionObserver(
 		(entries) => {
@@ -71,6 +85,7 @@ export const reveal: Action<HTMLElement, RevealOptions | undefined> = (node, opt
 		destroy: () => {
 			io.disconnect();
 			if (settleTimer) clearTimeout(settleTimer);
+			clearTimeout(failsafeTimer);
 		}
 	};
 };

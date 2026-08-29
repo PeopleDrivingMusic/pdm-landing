@@ -51,14 +51,13 @@
 
 	function videoAllowed() {
 		if (prefersReducedMotion()) return false;
-		const conn = (
-			navigator as Navigator & {
-				connection?: { saveData?: boolean; effectiveType?: string };
-			}
-		).connection;
-		if (conn?.saveData) return false;
-		if (conn?.effectiveType && /(^|-)2g$/.test(conn.effectiveType)) return false;
-		return true;
+		// Only an explicit Save-Data opt-in suppresses the reel. `effectiveType`
+		// used to gate it too, but that reads as "2g" on browsers whose Network
+		// Information API is unreliable — Chrome on iOS among them — and the reel
+		// then never renders at all. Safari, which does not implement the API,
+		// was unaffected, which is exactly how the difference surfaced.
+		const conn = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+		return !conn?.saveData;
 	}
 
 	// Hand the frame to the next clip. The incoming clip is started *before* the
@@ -120,7 +119,8 @@
 
 	// Start the reel once; every transition after that is driven by handoff().
 	let kickedOff = false;
-	$effect(() => {
+
+	function startReel() {
 		if (!playing || kickedOff) return;
 		const first = els[current];
 		if (!first) return;
@@ -131,8 +131,14 @@
 				rolling = true;
 			})
 			.catch(() => {
+				// Autoplay refused. The poster is still showing, so the hero is intact;
+				// the first real interaction is a gesture the browser will accept.
 				kickedOff = false;
 			});
+	}
+
+	$effect(() => {
+		startReel();
 	});
 
 	function scrollTo(e: MouseEvent, href: string) {
@@ -187,8 +193,26 @@
 			// Clips advance on `ended` rather than on a timer, so a cut never lands
 			// mid-shot and a stalled download just holds the frame it is on.
 
+			// Browsers that refuse a programmatic play() will accept one made during
+			// a user gesture, so retry on the first interaction instead of leaving
+			// the visitor on a still poster for the whole session.
+			const retry = () => {
+				startReel();
+				if (kickedOff) detachRetry();
+			};
+			const RETRY_ON = ['pointerdown', 'touchstart', 'keydown', 'scroll'] as const;
+			const detachRetry = () => {
+				for (const evt of RETRY_ON) window.removeEventListener(evt, retry);
+			};
+			if (!kickedOff) {
+				for (const evt of RETRY_ON) {
+					window.addEventListener(evt, retry, { passive: true });
+				}
+			}
+
 			cleanup = () => {
 				if (parkTimer) clearTimeout(parkTimer);
+				detachRetry();
 				for (const v of els) v?.pause();
 				ctx.revert();
 			};
